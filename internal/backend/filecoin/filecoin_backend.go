@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"time"
 
 	"path/filepath"
 
@@ -29,6 +30,7 @@ var errNotFound = errors.New("not found")
 type FilecoinBackend struct {
 	sem    *backend.Semaphore
 	client *powclient.Client
+	config Config
 	backend.Layout
 }
 
@@ -56,10 +58,24 @@ func setAuthCtx(ctx context.Context, token string) context.Context {
 }
 
 func Open(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
-	return New(cfg)
+	fmt.Println("open called")
+
+	be, err := New(cfg)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating filecoin client")
+	}
+
+	be.Layout, err = backend.ParseLayout(ctx, be, cfg.Layout, defaultLayout, cfg.BackupPath)
+	if err != nil {
+		return nil, errors.Wrap(err, "parsing layout")
+	}
+
+	return be, nil
 }
 
 func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
+	debug.Log("Create() called\n")
+
 	be, err := New(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "creating filecoin client")
@@ -72,21 +88,27 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 
 	authnCtx := setAuthCtx(ctx, cfg.Token)
 
-	ipfs, err := newDecoratedIPFSAPI(cfg.IPFSRevProxyAddr, cfg.Token)
-	if err != nil {
-		return nil, errors.Wrap(err, "creating ipfs API")
-	}
+	if os.Getenv("FILECOIN_BYPASS_INIT_CHECK") == "" {
 
-	p := ipfspath.New(cfg.BackupUniqueID)
-	_, err = ipfs.Unixfs().Ls(authnCtx, p)
-	if err != nil {
-		if !strings.HasPrefix(err.Error(), "no link named") {
-			return nil, errors.Wrap(err, "listing files")
+		ipfs, err := newDecoratedIPFSAPI(cfg.IPFSRevProxyAddr, cfg.Token)
+		if err != nil {
+			return nil, errors.Wrap(err, "creating ipfs API")
 		}
-	} else {
-		return nil, errors.New("repository already initialized")
-	}
 
+		p := ipfspath.New(cfg.BackupUniqueID)
+
+		debug.Log("ipfspath = %v\n", p.String())
+
+		_, err = ipfs.Unixfs().Ls(authnCtx, p)
+		if err != nil {
+			if !strings.HasPrefix(err.Error(), "no link named") {
+				return nil, errors.Wrap(err, "listing files")
+			}
+		} else {
+			return nil, errors.New("repository already initialized")
+		}
+
+	}
 	// if alreadyExists {
 	// 	fmt.Printf("folder already existed\n")
 	// 	for dirEntry := range dirEntriesChan {
@@ -110,23 +132,6 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 			return nil, errors.Wrapf(err, "creating initial directory %q", absPath)
 		}
 	}
-
-	// ff, err := newSerialFileFromLocalDir(tmpInitDir)
-	// if err != nil {
-	// 	return nil, errors.Wrap(err, "initializing file from dir")
-	// }
-
-	// defer func() { _ = ff.Close() }()
-
-	// opts := []options.UnixfsAddOption{
-	// 	options.Unixfs.CidVersion(1),
-	// 	options.Unixfs.Pin(true),
-	// }
-
-	// pth, err := ipfs.Unixfs().Add(ctx, files.ToDir(ff), opts...)
-	// if err != nil {
-	// 	return nil, err
-	// }
 
 	cid, err := be.client.Data.StageFolder(authnCtx, cfg.IPFSRevProxyAddr, tmpInitDir)
 	if err != nil {
@@ -155,6 +160,7 @@ func New(cfg Config) (*FilecoinBackend, error) {
 	client, err := powclient.NewClient(cfg.ServerAddr)
 	return &FilecoinBackend{
 		client: client,
+		config: cfg,
 	}, err
 }
 
@@ -171,56 +177,131 @@ func (be *FilecoinBackend) ReadDir(ctx context.Context, dir string) (list []os.F
 
 // Test returns whether a file exists.
 func (be *FilecoinBackend) Test(ctx context.Context, h restic.Handle) (bool, error) {
-	return false, nil
+	debug.Log("Test(%+v)", h)
+
+	ipfs, err := newDecoratedIPFSAPI(be.config.IPFSRevProxyAddr, be.config.Token)
+	if err != nil {
+		return false, errors.Wrap(err, "creating ipfs API")
+	}
+
+	p := ipfspath.New(filepath.Join(be.config.BackupUniqueID, be.Filename(h)))
+
+	authnCtx := setAuthCtx(ctx, be.config.Token)
+	withTimeout, cancelFunc := context.WithTimeout(authnCtx, 3*time.Second)
+	defer cancelFunc()
+
+	debug.Log("ipfspath = %v\n", p.String())
+
+	stat, err := ipfs.Block().Stat(withTimeout, p)
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return false, nil
+		}
+		return false, errors.Wrap(err, "Get()")
+	}
+
+	debug.Log("stat = %+v", stat)
+
+	return true, nil
 }
 
 // IsNotExist returns true if the file does not exist.
 func (be *FilecoinBackend) IsNotExist(err error) bool {
+	debug.Log("IsNotExist()\n")
 	return errors.Cause(err) == errNotFound
 }
 
 // Save adds new Data to the backend.
-func (be *FilecoinBackend) Save(ctx context.Context, h restic.Handle, rd restic.RewindReader) error {
+func (be *FilecoinBackend) Save(ctx context.Context, h restic.Handle, rd restic.
+	RewindReader) error {
+	debug.Log("Save()\n")
+
 	return ctx.Err()
 }
 
 // Load runs fn with a reader that yields the contents of the file at h at the
 // given offset.
 func (be *FilecoinBackend) Load(ctx context.Context, h restic.Handle, length int, offset int64, fn func(rd io.Reader) error) error {
+	debug.Log("Load()\n")
+
 	return backend.DefaultLoad(ctx, h, length, offset, be.openReader, fn)
 }
 
 func (be *FilecoinBackend) openReader(ctx context.Context, h restic.Handle, length int, offset int64) (io.ReadCloser, error) {
+	debug.Log("openReader()\n")
+
 	return ioutil.NopCloser(nil), nil
 }
 
 // Stat returns information about a file in the backend.
 func (be *FilecoinBackend) Stat(ctx context.Context, h restic.Handle) (restic.FileInfo, error) {
+	debug.Log("Stat()\n")
+
 	return restic.FileInfo{Size: int64(42), Name: "foo"}, ctx.Err()
 }
 
 // Remove deletes a file from the backend.
 func (be *FilecoinBackend) Remove(ctx context.Context, h restic.Handle) error {
+	debug.Log("Remove()\n")
+
 	return ctx.Err()
 }
 
 // List returns a channel which yields entries from the backend.
 func (be *FilecoinBackend) List(ctx context.Context, t restic.FileType, fn func(restic.FileInfo) error) error {
+	debug.Log("List %v", t)
+
+	ipfs, err := newDecoratedIPFSAPI(be.config.IPFSRevProxyAddr, be.config.Token)
+	if err != nil {
+		return errors.Wrap(err, "creating ipfs API")
+	}
+
+	p := ipfspath.New(be.config.BackupUniqueID)
+
+	debug.Log("ipfspath = %v\n", p.String())
+
+	authnCtx := setAuthCtx(ctx, be.config.Token)
+
+	dirEntries, err := ipfs.Unixfs().Ls(authnCtx, p)
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "no link named") {
+			return errors.Wrap(err, "listing files")
+		}
+	}
+
+	for dirEntry := range dirEntries {
+		debug.Log("send %v\n", dirEntry)
+
+		rfi := restic.FileInfo{}
+		if err := fn(rfi); err != nil {
+			return errors.Wrapf(err, "executing fn with %v", dirEntry)
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+	}
 
 	return ctx.Err()
 }
 
 // Location returns the location of the backend (RAM).
 func (be *FilecoinBackend) Location() string {
+	debug.Log("Location()\n")
+
 	return "filecoin"
 }
 
 // Delete removes all data in the backend.
 func (be *FilecoinBackend) Delete(ctx context.Context) error {
+	debug.Log("Delete()\n")
+
 	return nil
 }
 
 // Close closes the backend.
 func (be *FilecoinBackend) Close() error {
+	debug.Log("Close()\n")
+
 	return nil
 }

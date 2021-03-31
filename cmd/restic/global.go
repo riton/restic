@@ -566,6 +566,10 @@ func parseConfig(loc location.Location, opts options.Options) (interface{}, erro
 			}
 		}
 
+		if cfg.Layout == "" {
+			cfg.Layout = "default"
+		}
+
 		if err := opts.Apply(loc.Scheme, &cfg); err != nil {
 			return nil, err
 		}
