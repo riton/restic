@@ -8,8 +8,6 @@ import (
 	"path"
 	"path/filepath"
 
-	files "github.com/ipfs/go-ipfs-files"
-	"github.com/ipfs/interface-go-ipfs-core/options"
 	"github.com/restic/restic/internal/backend"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
@@ -53,11 +51,11 @@ func setAuthCtx(ctx context.Context, token string) context.Context {
 }
 
 func Open(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
-	return New()
+	return New(cfg)
 }
 
 func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
-	be, err := New()
+	be, err := New(cfg)
 	if err != nil {
 		return nil, errors.Wrap(err, "creating filecoin client")
 	}
@@ -67,10 +65,12 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 		return nil, errors.Wrap(err, "parsing layout")
 	}
 
-	ipfs, err := newDecoratedIPFSAPI(cfg.IPFSRevProxyAddr, cfg.Token)
-	if err != nil {
-		return nil, errors.Wrap(err, "creating ipfs API")
-	}
+	// ipfs, err := newDecoratedIPFSAPI(cfg.IPFSRevProxyAddr, cfg.Token)
+	// if err != nil {
+	// 	return nil, errors.Wrap(err, "creating ipfs API")
+	// }
+
+	// TODO: should check if initial dir does not already exist
 
 	tmpInitDir, err := ioutil.TempDir("", "restic-filecoin")
 	if err != nil {
@@ -84,29 +84,50 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 		}
 	}
 
-	ff, err := newSerialFileFromLocalDir(tmpInitDir)
+	// ff, err := newSerialFileFromLocalDir(tmpInitDir)
+	// if err != nil {
+	// 	return nil, errors.Wrap(err, "initializing file from dir")
+	// }
+
+	// defer func() { _ = ff.Close() }()
+
+	// opts := []options.UnixfsAddOption{
+	// 	options.Unixfs.CidVersion(1),
+	// 	options.Unixfs.Pin(true),
+	// }
+
+	// pth, err := ipfs.Unixfs().Add(ctx, files.ToDir(ff), opts...)
+	// if err != nil {
+	// 	return nil, err
+	// }
+
+	authnCtx := setAuthCtx(ctx, cfg.Token)
+
+	cid, err := be.client.Data.StageFolder(authnCtx, cfg.IPFSRevProxyAddr, tmpInitDir)
 	if err != nil {
-		return nil, errors.Wrap(err, "initializing file from dir")
+		return nil, errors.Wrap(err, "staging initial directory layout")
 	}
 
-	defer func() { _ = ff.Close() }()
+	debug.Log("folder staged with CID: %q\n", cid)
 
-	opts := []options.UnixfsAddOption{
-		options.Unixfs.CidVersion(1),
-		options.Unixfs.Pin(true),
+	// TODO: Support all apply options
+	applyOptions := []powclient.ApplyOption{
+		powclient.WithOverride(true),
 	}
 
-	pth, err := ipfs.Unixfs().Add(ctx, files.ToDir(ff), opts...)
+	resp, err := be.client.StorageConfig.Apply(authnCtx, cid, applyOptions...)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "applying initial storage configuration")
 	}
+
+	debug.Log("storage config applied with jobID %s\n", resp.JobId)
 
 	return be, err
 }
 
 // New returns a new backend that saves all data in a map in memory.
-func New() (*FilecoinBackend, error) {
-	client, err := powclient.NewClient("127.0.0.1:5002", nil)
+func New(cfg Config) (*FilecoinBackend, error) {
+	client, err := powclient.NewClient(cfg.ServerAddr)
 	return &FilecoinBackend{
 		client: client,
 	}, err
