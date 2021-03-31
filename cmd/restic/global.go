@@ -566,6 +566,14 @@ func parseConfig(loc location.Location, opts options.Options) (interface{}, erro
 			}
 		}
 
+		cfg.IPFSTimeout = 5 * time.Second
+		if os.Getenv("FILECOIN_IPFS_TIMEOUT") != "" {
+			ipfsTimeout, err := time.ParseDuration(os.Getenv("FILECOIN_IPFS_TIMEOUT"))
+			if err == nil {
+				cfg.IPFSTimeout = ipfsTimeout
+			}
+		}
+
 		if cfg.Layout == "" {
 			cfg.Layout = "default"
 		}

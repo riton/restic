@@ -41,6 +41,7 @@ type Config struct {
 	Layout           string `option:"layout" help:"use this backend layout (default: auto-detect)"`
 	BackupPath       string
 	BackupUniqueID   string
+	IPFSTimeout      time.Duration
 }
 
 const defaultLayout = "default"
@@ -179,6 +180,9 @@ func (be *FilecoinBackend) ReadDir(ctx context.Context, dir string) (list []os.F
 func (be *FilecoinBackend) Test(ctx context.Context, h restic.Handle) (bool, error) {
 	debug.Log("Test(%+v)", h)
 
+	ipfsCtx, cancelFunc := context.WithTimeout(ctx, be.config.IPFSTimeout)
+	defer cancelFunc()
+
 	ipfs, err := newDecoratedIPFSAPI(be.config.IPFSRevProxyAddr, be.config.Token)
 	if err != nil {
 		return false, errors.Wrap(err, "creating ipfs API")
@@ -186,15 +190,14 @@ func (be *FilecoinBackend) Test(ctx context.Context, h restic.Handle) (bool, err
 
 	p := ipfspath.New(filepath.Join(be.config.BackupUniqueID, be.Filename(h)))
 
-	authnCtx := setAuthCtx(ctx, be.config.Token)
-	withTimeout, cancelFunc := context.WithTimeout(authnCtx, 3*time.Second)
-	defer cancelFunc()
+	authnCtx := setAuthCtx(ipfsCtx, be.config.Token)
 
 	debug.Log("ipfspath = %v\n", p.String())
 
-	stat, err := ipfs.Block().Stat(withTimeout, p)
+	stat, err := ipfs.Object().Stat(authnCtx, p)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if errors.Cause(authnCtx.Err()) == context.DeadlineExceeded {
+			debug.Log("Object().Stat() timed out")
 			return false, nil
 		}
 		return false, errors.Wrap(err, "Get()")
@@ -272,7 +275,10 @@ func (be *FilecoinBackend) List(ctx context.Context, t restic.FileType, fn func(
 	for dirEntry := range dirEntries {
 		debug.Log("send %v\n", dirEntry)
 
-		rfi := restic.FileInfo{}
+		rfi := restic.FileInfo{
+			Name: dirEntry.Name,
+			Size: int64(dirEntry.Size),
+		}
 		if err := fn(rfi); err != nil {
 			return errors.Wrapf(err, "executing fn with %v", dirEntry)
 		}
