@@ -559,6 +559,13 @@ func parseConfig(loc location.Location, opts options.Options) (interface{}, erro
 			cfg.IPFSRevProxyAddr = os.Getenv("FILECOIN_IPFS_REVERSE_PROXY_ADDR")
 		}
 
+		if cfg.BackupUniqueID == "" {
+			cfg.BackupUniqueID = os.Getenv("FILECOIN_BACKUP_UNIQUE_ID")
+			if cfg.BackupUniqueID == "" {
+				return nil, errors.New("FILECOIN_BACKUP_UNIQUE_ID can't be empty")
+			}
+		}
+
 		if err := opts.Apply(loc.Scheme, &cfg); err != nil {
 			return nil, err
 		}

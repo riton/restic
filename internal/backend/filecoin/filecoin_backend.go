@@ -2,12 +2,16 @@ package filecoin
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"path"
+	"strings"
+
 	"path/filepath"
 
+	ipfspath "github.com/ipfs/interface-go-ipfs-core/path"
 	"github.com/restic/restic/internal/backend"
 	"github.com/restic/restic/internal/debug"
 	"github.com/restic/restic/internal/errors"
@@ -34,6 +38,7 @@ type Config struct {
 	IPFSRevProxyAddr string
 	Layout           string `option:"layout" help:"use this backend layout (default: auto-detect)"`
 	BackupPath       string
+	BackupUniqueID   string
 }
 
 const defaultLayout = "default"
@@ -65,10 +70,30 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 		return nil, errors.Wrap(err, "parsing layout")
 	}
 
-	// ipfs, err := newDecoratedIPFSAPI(cfg.IPFSRevProxyAddr, cfg.Token)
-	// if err != nil {
-	// 	return nil, errors.Wrap(err, "creating ipfs API")
-	// }
+	authnCtx := setAuthCtx(ctx, cfg.Token)
+
+	ipfs, err := newDecoratedIPFSAPI(cfg.IPFSRevProxyAddr, cfg.Token)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating ipfs API")
+	}
+
+	p := ipfspath.New(cfg.BackupUniqueID)
+	alreadyExists := false
+	dirEntriesChan, err := ipfs.Unixfs().Ls(authnCtx, p)
+	if err != nil {
+		if !strings.HasPrefix(err.Error(), "no link named") {
+			return nil, errors.Wrap(err, "listing files")
+		}
+	} else {
+		alreadyExists = true
+	}
+
+	if alreadyExists {
+		fmt.Printf("folder already existed\n")
+		for dirEntry := range dirEntriesChan {
+			fmt.Printf("dirEntry = %+v\n", dirEntry)
+		}
+	}
 
 	// TODO: should check if initial dir does not already exist
 
@@ -101,14 +126,12 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 	// 	return nil, err
 	// }
 
-	authnCtx := setAuthCtx(ctx, cfg.Token)
-
 	cid, err := be.client.Data.StageFolder(authnCtx, cfg.IPFSRevProxyAddr, tmpInitDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "staging initial directory layout")
 	}
 
-	debug.Log("folder staged with CID: %q\n", cid)
+	fmt.Printf("folder staged with CID: %q\n", cid)
 
 	// TODO: Support all apply options
 	applyOptions := []powclient.ApplyOption{
