@@ -78,22 +78,21 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 	}
 
 	p := ipfspath.New(cfg.BackupUniqueID)
-	alreadyExists := false
-	dirEntriesChan, err := ipfs.Unixfs().Ls(authnCtx, p)
+	_, err = ipfs.Unixfs().Ls(authnCtx, p)
 	if err != nil {
 		if !strings.HasPrefix(err.Error(), "no link named") {
 			return nil, errors.Wrap(err, "listing files")
 		}
 	} else {
-		alreadyExists = true
+		return nil, errors.New("repository already initialized")
 	}
 
-	if alreadyExists {
-		fmt.Printf("folder already existed\n")
-		for dirEntry := range dirEntriesChan {
-			fmt.Printf("dirEntry = %+v\n", dirEntry)
-		}
-	}
+	// if alreadyExists {
+	// 	fmt.Printf("folder already existed\n")
+	// 	for dirEntry := range dirEntriesChan {
+	// 		fmt.Printf("dirEntry = %+v\n", dirEntry)
+	// 	}
+	// }
 
 	// TODO: should check if initial dir does not already exist
 
