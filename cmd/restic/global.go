@@ -15,6 +15,7 @@ import (
 	"github.com/restic/restic/internal/backend"
 	"github.com/restic/restic/internal/backend/azure"
 	"github.com/restic/restic/internal/backend/b2"
+	"github.com/restic/restic/internal/backend/filecoin"
 	"github.com/restic/restic/internal/backend/gs"
 	"github.com/restic/restic/internal/backend/local"
 	"github.com/restic/restic/internal/backend/location"
@@ -544,6 +545,27 @@ func parseConfig(loc location.Location, opts options.Options) (interface{}, erro
 		debug.Log("opening local repository at %#v", cfg)
 		return cfg, nil
 
+	case "filecoin":
+		cfg := loc.Config.(filecoin.Config)
+		if cfg.Token == "" {
+			cfg.Token = os.Getenv("FILECOIN_TOKEN")
+		}
+
+		if cfg.ServerAddr == "" {
+			cfg.ServerAddr = os.Getenv("FILECOIN_SERVER_ADDR")
+		}
+
+		if cfg.IPFSRevProxyAddr == "" {
+			cfg.IPFSRevProxyAddr = os.Getenv("FILECOIN_IPFS_REVERSE_PROXY_ADDR")
+		}
+
+		if err := opts.Apply(loc.Scheme, &cfg); err != nil {
+			return nil, err
+		}
+
+		debug.Log("opening filecoin repository at %#v", cfg)
+		return cfg, nil
+
 	case "sftp":
 		cfg := loc.Config.(sftp.Config)
 		if err := opts.Apply(loc.Scheme, &cfg); err != nil {
@@ -697,6 +719,8 @@ func open(s string, gopts GlobalOptions, opts options.Options) (restic.Backend, 
 		be, err = local.Open(globalOptions.ctx, cfg.(local.Config))
 	case "sftp":
 		be, err = sftp.Open(globalOptions.ctx, cfg.(sftp.Config))
+	case "filecoin":
+		be, err = filecoin.Open(globalOptions.ctx, cfg.(filecoin.Config))
 	case "s3":
 		be, err = s3.Open(globalOptions.ctx, cfg.(s3.Config), rt)
 	case "gs":
@@ -773,6 +797,8 @@ func create(s string, opts options.Options) (restic.Backend, error) {
 		return local.Create(globalOptions.ctx, cfg.(local.Config))
 	case "sftp":
 		return sftp.Create(globalOptions.ctx, cfg.(sftp.Config))
+	case "filecoin":
+		return filecoin.Create(globalOptions.ctx, cfg.(filecoin.Config))
 	case "s3":
 		return s3.Create(globalOptions.ctx, cfg.(s3.Config), rt)
 	case "gs":

@@ -6,6 +6,7 @@ import (
 
 	"github.com/restic/restic/internal/backend/azure"
 	"github.com/restic/restic/internal/backend/b2"
+	"github.com/restic/restic/internal/backend/filecoin"
 	"github.com/restic/restic/internal/backend/gs"
 	"github.com/restic/restic/internal/backend/local"
 	"github.com/restic/restic/internal/backend/rclone"
@@ -35,6 +36,7 @@ var parsers = []parser{
 	{"b2", b2.ParseConfig, noPassword},
 	{"local", local.ParseConfig, noPassword},
 	{"sftp", sftp.ParseConfig, noPassword},
+	{"filecoin", filecoin.ParseConfig, filecoin.StripPassword},
 	{"s3", s3.ParseConfig, noPassword},
 	{"gs", gs.ParseConfig, noPassword},
 	{"azure", azure.ParseConfig, noPassword},
