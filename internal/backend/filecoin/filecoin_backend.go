@@ -100,6 +100,9 @@ func Create(ctx context.Context, cfg Config) (*FilecoinBackend, error) {
 	if err != nil {
 		return nil, errors.Wrap(err, "creating tempdir")
 	}
+	defer func() {
+		os.RemoveAll(tmpInitDir)
+	}()
 
 	for _, d := range be.Paths() {
 		absPath := filepath.Join(tmpInitDir, d)
